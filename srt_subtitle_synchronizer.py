@@ -270,7 +270,7 @@ class App(tk.Tk):
         preview.columnconfigure(1, weight=1)
 
         self.src_text = self._make_text_panel(preview, column=0, label="◀ Source file")
-        self.ref_text = self._make_text_panel(preview, column=1, label="Reference file ▶")
+        self.ref_text = self._make_text_panel(preview, column=1, label="Reference file ▶", mark_buttons=True)
 
         for widget in (self.src_text, self.ref_text):
             widget.bind("<FocusIn>",  lambda e, w=widget: self._set_active(w))
@@ -291,11 +291,12 @@ class App(tk.Tk):
         ttk.Label(tb, text="Click inside a panel to make it active",
                   foreground="gray", font=("", 8)).pack(side="right", padx=8)
 
-    def _make_text_panel(self, parent, column: int, label: str) -> tk.Text:
+    def _make_text_panel(self, parent, column: int, label: str, mark_buttons: bool = False) -> tk.Text:
         f = ttk.Frame(parent)
         f.grid(row=0, column=column, sticky="nsew",
                padx=(0, 6) if column == 0 else (6, 0))
-        f.rowconfigure(2, weight=1)
+        txt_row = 3 if mark_buttons else 2
+        f.rowconfigure(txt_row, weight=1)
         f.columnconfigure(0, weight=1)
 
         # ── Header row: label + scroll buttons ────────────────────────────────
@@ -321,6 +322,14 @@ class App(tk.Tk):
             command=lambda: _txt_ref[0].see(tk.END) if _txt_ref[0] else None
         ).pack(side="left")
 
+        if mark_buttons:
+            mark_frame = ttk.Frame(f)
+            mark_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+            ttk.Button(mark_frame, text="⏱ Mark start time",
+                       command=self._mark_start_time).pack(side="left", padx=(0, 6))
+            ttk.Button(mark_frame, text="⏱ Mark end time",
+                       command=self._mark_end_time).pack(side="left")
+
         # ── Text widget + scrollbars ───────────────────────────────────────────
         txt = tk.Text(f, wrap="none", width=48, height=18,
                       undo=True, font=("Monospace", 9),
@@ -329,12 +338,36 @@ class App(tk.Tk):
         scrolly = ttk.Scrollbar(f, orient="vertical",   command=txt.yview)
         scrollx = ttk.Scrollbar(f, orient="horizontal",  command=txt.xview)
         txt.configure(yscrollcommand=scrolly.set, xscrollcommand=scrollx.set)
-        txt.grid(row=2, column=0, sticky="nsew")
-        scrolly.grid(row=2, column=1, sticky="ns")
-        scrollx.grid(row=3, column=0, sticky="ew")
+        txt.grid(row=txt_row, column=0, sticky="nsew")
+        scrolly.grid(row=txt_row, column=1, sticky="ns")
+        scrollx.grid(row=txt_row + 1, column=0, sticky="ew")
 
         _txt_ref[0] = txt  # wire the buttons to the real widget
         return txt
+
+    def _mark_start_time(self):
+        w = self._active_text
+        if w is None:
+            self.status_var.set("Click inside a panel first.")
+            return
+        try:
+            sel = w.get(tk.SEL_FIRST, tk.SEL_LAST).strip()
+            self.start_var.set(sel)
+            self.status_var.set(f"Start time set to: {sel}")
+        except tk.TclError:
+            self.status_var.set("No text selected.")
+
+    def _mark_end_time(self):
+        w = self._active_text
+        if w is None:
+            self.status_var.set("Click inside a panel first.")
+            return
+        try:
+            sel = w.get(tk.SEL_FIRST, tk.SEL_LAST).strip()
+            self.end_var.set(sel)
+            self.status_var.set(f"End time set to: {sel}")
+        except tk.TclError:
+            self.status_var.set("No text selected.")
 
     def _set_active(self, widget: tk.Text):
         self._active_text = widget
