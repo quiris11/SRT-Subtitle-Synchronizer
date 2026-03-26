@@ -4,19 +4,19 @@ SRT Subtitle Synchronizer
 Linearly stretches/shifts all subtitle timestamps so that:
 - the first subtitle's start time maps to a target start time
 - the last subtitle's START time maps to a target end time
-  (so the last subtitle begins at the correct moment; its duration is preserved)
+(so the last subtitle begins at the correct moment; its duration is preserved)
 
 Supported input formats:
 *.srt – SubRip
 *.txt – MPL2 (times in deciseconds; '/' = italic, '|' = line break)
 
-Input file: original_name.lang.srt / .txt
-Output file: original_name_.lang.srt (underscore before the language tag,
-always written as UTF-8 SRT)
+Input file:  original_name.lang.srt / .txt
+Output file: original_name.lang.srt  (same name – original backed up as original_name.bkp.lang.srt)
 """
 
 import re
 import os
+import shutil
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
@@ -122,14 +122,14 @@ def first_start_last_start(path: str):
     blocks = parse_subtitle_file(path)
     if not blocks:
         raise ValueError("No subtitle blocks found in the file.")
-    return blocks[0][1], blocks[-1][1]   # ← last START, not last END
+    return blocks[0][1], blocks[-1][1]  # ← last START, not last END
 
 # ── SRT writing ───────────────────────────────────────────────────────────────
 
 def write_srt(blocks, target_start_ms: int, target_last_start_ms: int, out_path: str):
     """
     Linearly remap timestamps so that:
-      - blocks[0].start  → target_start_ms
+      - blocks[0].start → target_start_ms
       - blocks[-1].start → target_last_start_ms
     The duration of every subtitle is preserved (scaled uniformly).
     """
@@ -157,18 +157,27 @@ def write_srt(blocks, target_start_ms: int, target_last_start_ms: int, out_path:
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines_out))
 
-# ── output path helper ────────────────────────────────────────────────────────
+# ── path helpers ──────────────────────────────────────────────────────────────
 
 def make_output_path(src_path: str) -> str:
+    """Output overwrites the original file (same path)."""
+    return src_path
+
+def make_backup_path(src_path: str) -> str:
+    """
+    Build backup path by inserting '.bkp' before the language tag:
+      movie.pl.srt  →  movie.bkp.pl.srt
+      movie.srt     →  movie.bkp.srt
+    """
     directory = os.path.dirname(src_path)
     basename  = os.path.basename(src_path)
-    stem, _ext = os.path.splitext(basename)
-    stem2, ext2 = os.path.splitext(stem)
+    stem, _ext = os.path.splitext(basename)    # "movie.pl", ".srt"
+    stem2, ext2 = os.path.splitext(stem)       # "movie",    ".pl"
     if ext2:
-        out_name = f"{stem2}_{ext2}.srt"
+        bkp_name = f"{stem2}.bkp{ext2}.srt"   # movie.bkp.pl.srt
     else:
-        out_name = f"{stem}_.srt"
-    return os.path.join(directory, out_name)
+        bkp_name = f"{stem}.bkp.srt"           # movie.bkp.srt
+    return os.path.join(directory, bkp_name)
 
 # ── GUI ───────────────────────────────────────────────────────────────────────
 
@@ -177,7 +186,7 @@ class App(tk.Tk):
         super().__init__()
         self.title("SRT Subtitle Synchronizer")
         self.resizable(True, True)
-        self.minsize(900, 520)
+        self.minsize(900, 560)
         self._active_text: tk.Text | None = None
         self._build_ui()
 
@@ -242,7 +251,7 @@ class App(tk.Tk):
         ttk.Separator(ctrl, orient="horizontal").grid(
             row=6, column=0, columnspan=3, sticky="ew", pady=4)
 
-        ttk.Button(ctrl, text="⟳  Synchronize subtitles",
+        ttk.Button(ctrl, text="⟳ Synchronize subtitles",
                    command=self._run, width=30).grid(
             row=7, column=0, columnspan=3, pady=8)
 
@@ -253,32 +262,31 @@ class App(tk.Tk):
 
         self.src_var.trace_add("write", lambda *_: self._update_out_preview())
 
-        # ── Preview panel ──────────────────────────────────────────────────────
+        # ── Preview panel ─────────────────────────────────────────────────────
         preview = ttk.LabelFrame(outer, text="File Preview", padding=8)
         preview.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
         preview.rowconfigure(0, weight=1)
         preview.columnconfigure(0, weight=1)
         preview.columnconfigure(1, weight=1)
 
-        self.src_text = self._make_text_panel(preview, column=0, label="◀  Source file")
-        self.ref_text = self._make_text_panel(preview, column=1, label="Reference file  ▶")
+        self.src_text = self._make_text_panel(preview, column=0, label="◀ Source file")
+        self.ref_text = self._make_text_panel(preview, column=1, label="Reference file ▶")
 
-        for widget, txt in ((self.src_text, self.src_text),
-                            (self.ref_text, self.ref_text)):
-            widget.bind("<FocusIn>", lambda e, w=txt: self._set_active(w))
-            widget.bind("<Button-1>", lambda e, w=txt: self.after(0, lambda: self._set_active(w)))
+        for widget in (self.src_text, self.ref_text):
+            widget.bind("<FocusIn>",  lambda e, w=widget: self._set_active(w))
+            widget.bind("<Button-1>", lambda e, w=widget: self.after(0, lambda: self._set_active(w)))
 
         tb = ttk.Frame(preview)
         tb.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
-        ttk.Button(tb, text="📋  Copy selection",
+        ttk.Button(tb, text="📋 Copy selection",
                    command=self._copy_selection).pack(side="left", padx=4)
-        ttk.Button(tb, text="🗑  Delete selected lines",
+        ttk.Button(tb, text="🗑 Delete selected lines",
                    command=self._delete_selected_lines).pack(side="left", padx=4)
         ttk.Separator(tb, orient="vertical").pack(side="left", fill="y", padx=8)
-        ttk.Button(tb, text="💾  Save source file",
+        ttk.Button(tb, text="💾 Save source file",
                    command=self._save_src).pack(side="left", padx=4)
-        ttk.Button(tb, text="💾  Save reference file",
+        ttk.Button(tb, text="💾 Save reference file",
                    command=self._save_ref).pack(side="left", padx=4)
         ttk.Label(tb, text="Click inside a panel to make it active",
                   foreground="gray", font=("", 8)).pack(side="right", padx=8)
@@ -287,32 +295,55 @@ class App(tk.Tk):
         f = ttk.Frame(parent)
         f.grid(row=0, column=column, sticky="nsew",
                padx=(0, 6) if column == 0 else (6, 0))
-        f.rowconfigure(1, weight=1)
+        f.rowconfigure(2, weight=1)
         f.columnconfigure(0, weight=1)
 
-        ttk.Label(f, text=label, font=("", 9, "bold")).grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, 2))
+        # ── Header row: label + scroll buttons ────────────────────────────────
+        hdr = ttk.Frame(f)
+        hdr.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 2))
+        hdr.columnconfigure(0, weight=1)
 
+        ttk.Label(hdr, text=label, font=("", 9, "bold")).grid(
+            row=0, column=0, sticky="w")
+
+        btn_frame = ttk.Frame(hdr)
+        btn_frame.grid(row=0, column=1, sticky="e")
+
+        # Placeholder – real text widget bound after creation
+        _txt_ref = [None]
+
+        ttk.Button(
+            btn_frame, text="⬆ Top", width=7,
+            command=lambda: _txt_ref[0].see("1.0") if _txt_ref[0] else None
+        ).pack(side="left", padx=(0, 2))
+        ttk.Button(
+            btn_frame, text="⬇ End", width=7,
+            command=lambda: _txt_ref[0].see(tk.END) if _txt_ref[0] else None
+        ).pack(side="left")
+
+        # ── Text widget + scrollbars ───────────────────────────────────────────
         txt = tk.Text(f, wrap="none", width=48, height=18,
                       undo=True, font=("Monospace", 9),
                       relief="sunken", borderwidth=1,
                       selectbackground="#3399ff", selectforeground="white")
         scrolly = ttk.Scrollbar(f, orient="vertical",   command=txt.yview)
-        scrollx = ttk.Scrollbar(f, orient="horizontal", command=txt.xview)
+        scrollx = ttk.Scrollbar(f, orient="horizontal",  command=txt.xview)
         txt.configure(yscrollcommand=scrolly.set, xscrollcommand=scrollx.set)
-        txt.grid(row=1, column=0, sticky="nsew")
-        scrolly.grid(row=1, column=1, sticky="ns")
-        scrollx.grid(row=2, column=0, sticky="ew")
+        txt.grid(row=2, column=0, sticky="nsew")
+        scrolly.grid(row=2, column=1, sticky="ns")
+        scrollx.grid(row=3, column=0, sticky="ew")
+
+        _txt_ref[0] = txt  # wire the buttons to the real widget
         return txt
 
     def _set_active(self, widget: tk.Text):
         self._active_text = widget
 
     _FILE_TYPES = [
-        ("Subtitle files",       "*.srt *.txt"),
-        ("SubRip subtitles",     "*.srt"),
+        ("Subtitle files",    "*.srt *.txt"),
+        ("SubRip subtitles",  "*.srt"),
         ("MPL2 subtitles (TXT)", "*.txt"),
-        ("All files",            "*.*"),
+        ("All files",         "*.*"),
     ]
 
     def _browse_src(self):
@@ -406,7 +437,7 @@ class App(tk.Tk):
 
     def _load_times_from(self, path: str, label: str):
         try:
-            s_ms, e_ms = first_start_last_start(path)   # ← last START
+            s_ms, e_ms = first_start_last_start(path)
             self.start_var.set(ms_to_time(s_ms))
             self.end_var.set(ms_to_time(e_ms))
             self.status_var.set(
@@ -416,7 +447,12 @@ class App(tk.Tk):
 
     def _update_out_preview(self):
         src = self.src_var.get().strip()
-        self.out_var.set(make_output_path(src) if src else "(select source file first)")
+        if src:
+            bkp = make_backup_path(src)
+            self.out_var.set(
+                f"{os.path.basename(src)}  (backup → {os.path.basename(bkp)})")
+        else:
+            self.out_var.set("(select source file first)")
 
     def _run(self):
         src = self.src_var.get().strip()
@@ -442,7 +478,17 @@ class App(tk.Tk):
             messagebox.showerror("Empty file", "No subtitle blocks found.")
             return
 
-        out_path = make_output_path(src)
+        out_path = make_output_path(src)   # same as source
+        bkp_path = make_backup_path(src)   # original_name.bkp.lang.srt
+
+        # Back up original before overwriting
+        try:
+            shutil.copy2(src, bkp_path)
+        except Exception as exc:
+            messagebox.showerror("Backup error",
+                                 f"Could not create backup:\n{exc}")
+            return
+
         try:
             write_srt(blocks, start_ms, last_start_ms, out_path)
         except Exception as exc:
@@ -450,10 +496,12 @@ class App(tk.Tk):
             return
 
         fmt = "MPL2→SRT" if src.lower().endswith(".txt") else "SRT"
-        self.status_var.set(f"✓ Saved → {os.path.basename(out_path)}")
+        self.status_var.set(f"✓ Saved → {os.path.basename(out_path)}  |  backup → {os.path.basename(bkp_path)}")
         messagebox.showinfo(
             "Done",
-            f"Synchronized {len(blocks)} subtitle blocks [{fmt}].\n\nOutput:\n{out_path}")
+            f"Synchronized {len(blocks)} subtitle blocks [{fmt}].\n\n"
+            f"Output:  {out_path}\n"
+            f"Backup:  {bkp_path}")
 
 
 if __name__ == "__main__":
