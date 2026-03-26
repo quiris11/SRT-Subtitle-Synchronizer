@@ -3,7 +3,8 @@
 SRT Subtitle Synchronizer
 Linearly stretches/shifts all subtitle timestamps so that:
 - the first subtitle's start time maps to a target start time
-- the last subtitle's end time maps to a target end time
+- the last subtitle's START time maps to a target end time
+  (so the last subtitle begins at the correct moment; its duration is preserved)
 
 Supported input formats:
 *.srt – SubRip
@@ -116,24 +117,31 @@ def parse_subtitle_file(path: str):
         return parse_mpl2(path)
     return parse_srt(path)
 
-def first_start_last_end(path: str):
+def first_start_last_start(path: str):
+    """Return (first_subtitle_start_ms, last_subtitle_START_ms) from any supported file."""
     blocks = parse_subtitle_file(path)
     if not blocks:
         raise ValueError("No subtitle blocks found in the file.")
-    return blocks[0][1], blocks[-1][2]
+    return blocks[0][1], blocks[-1][1]   # ← last START, not last END
 
 # ── SRT writing ───────────────────────────────────────────────────────────────
 
-def write_srt(blocks, target_start_ms: int, target_end_ms: int, out_path: str):
-    orig_start = blocks[0][1]
-    orig_end   = blocks[-1][2]
-    span_orig  = orig_end - orig_start
-    span_tgt   = target_end_ms - target_start_ms
+def write_srt(blocks, target_start_ms: int, target_last_start_ms: int, out_path: str):
+    """
+    Linearly remap timestamps so that:
+      - blocks[0].start  → target_start_ms
+      - blocks[-1].start → target_last_start_ms
+    The duration of every subtitle is preserved (scaled uniformly).
+    """
+    orig_start      = blocks[0][1]
+    orig_last_start = blocks[-1][1]   # ← anchor on last START
+    span_orig = orig_last_start - orig_start
+    span_tgt  = target_last_start_ms - target_start_ms
 
     if span_orig == 0:
-        raise ValueError("Source start and end times are identical – cannot scale.")
+        raise ValueError("Source first and last start times are identical – cannot scale.")
     if span_tgt <= 0:
-        raise ValueError("Target end time must be later than target start time.")
+        raise ValueError("Target last-subtitle start must be later than target start time.")
 
     def remap(ms):
         return target_start_ms + (ms - orig_start) * span_tgt / span_orig
@@ -173,8 +181,6 @@ class App(tk.Tk):
         self._active_text: tk.Text | None = None
         self._build_ui()
 
-    # ── UI construction ───────────────────────────────────────────────────────
-
     def _build_ui(self):
         PAD = dict(padx=10, pady=6)
 
@@ -186,12 +192,11 @@ class App(tk.Tk):
         outer.rowconfigure(1, weight=1)
         outer.columnconfigure(0, weight=1)
 
-        # ── Top controls frame ────────────────────────────────────────────────
+        # ── Top controls ──────────────────────────────────────────────────────
         ctrl = ttk.Frame(outer)
         ctrl.grid(row=0, column=0, sticky="ew")
         ctrl.columnconfigure(1, weight=1)
 
-        # Source file
         ttk.Label(ctrl, text="Source file (SRT / MPL2 TXT):",
                   font=("", 10, "bold")).grid(row=0, column=0, sticky="w", **PAD)
         self.src_var = tk.StringVar()
@@ -200,7 +205,6 @@ class App(tk.Tk):
         ttk.Button(ctrl, text="Browse…", command=self._browse_src).grid(
             row=0, column=2, **PAD)
 
-        # Reference file
         ttk.Label(ctrl, text="Reference SRT / TXT\n(optional – loads times):",
                   font=("", 10)).grid(row=1, column=0, sticky="w", **PAD)
         self.ref_var = tk.StringVar()
@@ -212,14 +216,13 @@ class App(tk.Tk):
         ttk.Separator(ctrl, orient="horizontal").grid(
             row=2, column=0, columnspan=3, sticky="ew", pady=4)
 
-        # Target times
         ttk.Label(ctrl, text="Target start time\n(first subtitle appears):",
                   font=("", 10)).grid(row=3, column=0, sticky="w", **PAD)
         self.start_var = tk.StringVar(value="00:00:00,000")
         ttk.Entry(ctrl, textvariable=self.start_var, width=18).grid(
             row=3, column=1, sticky="w", **PAD)
 
-        ttk.Label(ctrl, text="Target end time\n(last subtitle ends):",
+        ttk.Label(ctrl, text="Target time of last subtitle\n(last subtitle starts):",
                   font=("", 10)).grid(row=4, column=0, sticky="w", **PAD)
         self.end_var = tk.StringVar(value="00:00:00,000")
         ttk.Entry(ctrl, textvariable=self.end_var, width=18).grid(
@@ -229,7 +232,6 @@ class App(tk.Tk):
                   foreground="gray", font=("", 8)).grid(
             row=4, column=1, sticky="se", padx=10)
 
-        # Output path preview
         ttk.Label(ctrl, text="Output file:", font=("", 10)).grid(
             row=5, column=0, sticky="w", **PAD)
         self.out_var = tk.StringVar(value="(select source file first)")
@@ -240,12 +242,10 @@ class App(tk.Tk):
         ttk.Separator(ctrl, orient="horizontal").grid(
             row=6, column=0, columnspan=3, sticky="ew", pady=4)
 
-        # Action button
         ttk.Button(ctrl, text="⟳  Synchronize subtitles",
                    command=self._run, width=30).grid(
             row=7, column=0, columnspan=3, pady=8)
 
-        # Status bar
         self.status_var = tk.StringVar(value="Ready.")
         ttk.Label(ctrl, textvariable=self.status_var,
                   foreground="gray", font=("", 9)).grid(
@@ -260,17 +260,14 @@ class App(tk.Tk):
         preview.columnconfigure(0, weight=1)
         preview.columnconfigure(1, weight=1)
 
-        self.src_text = self._make_text_panel(
-            preview, column=0, label="◀  Source file")
-        self.ref_text = self._make_text_panel(
-            preview, column=1, label="Reference file  ▶")
+        self.src_text = self._make_text_panel(preview, column=0, label="◀  Source file")
+        self.ref_text = self._make_text_panel(preview, column=1, label="Reference file  ▶")
 
-        self.src_text.bind("<FocusIn>", lambda e: self._set_active(self.src_text))
-        self.ref_text.bind("<FocusIn>", lambda e: self._set_active(self.ref_text))
-        self.src_text.bind("<Button-1>", lambda e: self.after(0, lambda: self._set_active(self.src_text)))
-        self.ref_text.bind("<Button-1>", lambda e: self.after(0, lambda: self._set_active(self.ref_text)))
+        for widget, txt in ((self.src_text, self.src_text),
+                            (self.ref_text, self.ref_text)):
+            widget.bind("<FocusIn>", lambda e, w=txt: self._set_active(w))
+            widget.bind("<Button-1>", lambda e, w=txt: self.after(0, lambda: self._set_active(w)))
 
-        # ── Preview toolbar ────────────────────────────────────────────────────
         tb = ttk.Frame(preview)
         tb.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
 
@@ -278,23 +275,15 @@ class App(tk.Tk):
                    command=self._copy_selection).pack(side="left", padx=4)
         ttk.Button(tb, text="🗑  Delete selected lines",
                    command=self._delete_selected_lines).pack(side="left", padx=4)
-
         ttk.Separator(tb, orient="vertical").pack(side="left", fill="y", padx=8)
-
         ttk.Button(tb, text="💾  Save source file",
                    command=self._save_src).pack(side="left", padx=4)
         ttk.Button(tb, text="💾  Save reference file",
                    command=self._save_ref).pack(side="left", padx=4)
+        ttk.Label(tb, text="Click inside a panel to make it active",
+                  foreground="gray", font=("", 8)).pack(side="right", padx=8)
 
-        lbl = ttk.Label(tb,
-                        text="Click inside a panel to make it active",
-                        foreground="gray", font=("", 8))
-        lbl.pack(side="right", padx=8)
-
-    # ── helpers for building Text panels ─────────────────────────────────────
-
-    def _make_text_panel(self, parent: ttk.Frame,
-                         column: int, label: str) -> tk.Text:
+    def _make_text_panel(self, parent, column: int, label: str) -> tk.Text:
         f = ttk.Frame(parent)
         f.grid(row=0, column=column, sticky="nsew",
                padx=(0, 6) if column == 0 else (6, 0))
@@ -311,25 +300,19 @@ class App(tk.Tk):
         scrolly = ttk.Scrollbar(f, orient="vertical",   command=txt.yview)
         scrollx = ttk.Scrollbar(f, orient="horizontal", command=txt.xview)
         txt.configure(yscrollcommand=scrolly.set, xscrollcommand=scrollx.set)
-
         txt.grid(row=1, column=0, sticky="nsew")
         scrolly.grid(row=1, column=1, sticky="ns")
         scrollx.grid(row=2, column=0, sticky="ew")
-
         return txt
-
-    # ── active panel tracking ────────────────────────────────────────────────
 
     def _set_active(self, widget: tk.Text):
         self._active_text = widget
 
-    # ── file browsing ─────────────────────────────────────────────────────────
-
     _FILE_TYPES = [
-        ("Subtitle files",   "*.srt *.txt"),
-        ("SubRip subtitles", "*.srt"),
+        ("Subtitle files",       "*.srt *.txt"),
+        ("SubRip subtitles",     "*.srt"),
         ("MPL2 subtitles (TXT)", "*.txt"),
-        ("All files", "*.*"),
+        ("All files",            "*.*"),
     ]
 
     def _browse_src(self):
@@ -353,8 +336,6 @@ class App(tk.Tk):
         self._load_times_from(path, "reference")
         self._load_preview(self.ref_text, path)
 
-    # ── preview helpers ───────────────────────────────────────────────────────
-
     def _load_preview(self, text_widget: tk.Text, path: str):
         try:
             try:
@@ -368,8 +349,6 @@ class App(tk.Tk):
             text_widget.insert("1.0", content)
         except Exception as exc:
             messagebox.showerror("Preview error", str(exc))
-
-    # ── toolbar actions ───────────────────────────────────────────────────────
 
     def _copy_selection(self):
         w = self._active_text
@@ -395,7 +374,6 @@ class App(tk.Tk):
             start_line = int(start_idx.split(".")[0])
             end_line   = int(end_idx.split(".")[0])
             end_col    = int(end_idx.split(".")[1])
-            # Don't include the last line if the selection ends at its very start
             if end_col == 0 and end_line > start_line:
                 end_line -= 1
             w.delete(f"{start_line}.0", f"{end_line + 1}.0")
@@ -404,20 +382,19 @@ class App(tk.Tk):
         except tk.TclError:
             self.status_var.set("No text selected.")
 
-    def _save_panel(self, text_widget: tk.Text, path_var: tk.StringVar,
-                    label: str):
+    def _save_panel(self, text_widget: tk.Text, path_var: tk.StringVar, label: str):
         path = path_var.get().strip()
         if not path:
             messagebox.showwarning("No file", f"No {label} file loaded.")
             return
         content = text_widget.get("1.0", tk.END)
-        # tk.Text always appends a trailing newline – strip it
         if content.endswith("\n"):
             content = content[:-1]
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
-            self.status_var.set(f"✓ {label.capitalize()} saved → {os.path.basename(path)}")
+            self.status_var.set(
+                f"✓ {label.capitalize()} saved → {os.path.basename(path)}")
         except Exception as exc:
             messagebox.showerror("Save error", str(exc))
 
@@ -427,11 +404,9 @@ class App(tk.Tk):
     def _save_ref(self):
         self._save_panel(self.ref_text, self.ref_var, "reference")
 
-    # ── misc helpers ──────────────────────────────────────────────────────────
-
     def _load_times_from(self, path: str, label: str):
         try:
-            s_ms, e_ms = first_start_last_end(path)
+            s_ms, e_ms = first_start_last_start(path)   # ← last START
             self.start_var.set(ms_to_time(s_ms))
             self.end_var.set(ms_to_time(e_ms))
             self.status_var.set(
@@ -443,22 +418,20 @@ class App(tk.Tk):
         src = self.src_var.get().strip()
         self.out_var.set(make_output_path(src) if src else "(select source file first)")
 
-    # ── main action ───────────────────────────────────────────────────────────
-
     def _run(self):
         src = self.src_var.get().strip()
         if not src:
             messagebox.showwarning("No file", "Please select a source subtitle file.")
             return
         try:
-            start_ms = time_to_ms(self.start_var.get())
-            end_ms   = time_to_ms(self.end_var.get())
+            start_ms      = time_to_ms(self.start_var.get())
+            last_start_ms = time_to_ms(self.end_var.get())
         except ValueError as exc:
             messagebox.showerror("Invalid time", str(exc))
             return
-        if end_ms <= start_ms:
+        if last_start_ms <= start_ms:
             messagebox.showerror("Invalid range",
-                                 "Target end time must be later than start time.")
+                                 "Target last-subtitle start must be later than start time.")
             return
         try:
             blocks = parse_subtitle_file(src)
@@ -471,7 +444,7 @@ class App(tk.Tk):
 
         out_path = make_output_path(src)
         try:
-            write_srt(blocks, start_ms, end_ms, out_path)
+            write_srt(blocks, start_ms, last_start_ms, out_path)
         except Exception as exc:
             messagebox.showerror("Write error", str(exc))
             return
