@@ -344,9 +344,6 @@ class App(tk.Tk):
                   foreground="#1a9c1a", font=("", 13, "bold")).pack(
             side="left", padx=(0, 8))
 
-        ttk.Button(start_row, text="⏱ Mark start time",
-                   command=self._mark_start_time).pack(side="left", padx=(0, 14))
-
         # Synchronize + unsaved warning – pinned to the right of start_row
         sync_frame = ttk.Frame(start_row)
         sync_frame.pack(side="right", padx=(0, 10))
@@ -372,9 +369,6 @@ class App(tk.Tk):
         ttk.Label(end_row, textvariable=self.end_tick_var,
                   foreground="#1a9c1a", font=("", 13, "bold")).pack(
             side="left", padx=(0, 8))
-
-        ttk.Button(end_row, text="⏱ Mark end time",
-                   command=self._mark_end_time).pack(side="left", padx=(0, 14))
 
         ttk.Label(end_row, text="Format: HH:MM:SS,mmm",
                   foreground="gray", font=("", 8)).pack(side="left")
@@ -442,10 +436,11 @@ class App(tk.Tk):
 
     # ── Text panel factory ────────────────────────────────────────────────────
 
-    def _make_text_panel(self, parent, column: int, label: str, mark_buttons: bool = False) -> tk.Text:
+    def _make_text_panel(self, parent, column: int, label: str,
+                         mark_buttons: bool = False) -> tk.Text:
         """
-        Build one preview panel (label + header buttons + text widget).
-        Mark start/end buttons are placed in the header row alongside Top/End.
+        Left panel  (column=0): only bold label, no header buttons.
+        Right panel (column=1): Top/End (both panels) + Mark start/end.
         """
         f = ttk.Frame(parent)
         f.grid(row=0, column=column, sticky="nsew",
@@ -453,7 +448,7 @@ class App(tk.Tk):
         f.rowconfigure(1, weight=1)
         f.columnconfigure(0, weight=1)
 
-        # ── Header row ────────────────────────────────────────────────────────
+        # ── Header row ────────────────────────────────────────────────────────────────────
         hdr = ttk.Frame(f)
         hdr.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 3))
         hdr.columnconfigure(0, weight=1)
@@ -461,26 +456,24 @@ class App(tk.Tk):
         ttk.Label(hdr, text=label, font=("", 9, "bold")).grid(
             row=0, column=0, sticky="w")
 
-        btn_frame = ttk.Frame(hdr)
-        btn_frame.grid(row=0, column=1, sticky="e")
-
-        _txt_ref = [None]   # forward reference
-
-        ttk.Button(btn_frame, text="⬆ Top", width=7,
-                   command=lambda: _txt_ref[0].see("1.0") if _txt_ref[0] else None
-                   ).pack(side="left", padx=(0, 2))
-        ttk.Button(btn_frame, text="⬇ End", width=7,
-                   command=lambda: _txt_ref[0].see(tk.END) if _txt_ref[0] else None
-                   ).pack(side="left", padx=(0, 8))
-
         if mark_buttons:
+            btn_frame = ttk.Frame(hdr)
+            btn_frame.grid(row=0, column=1, sticky="e")
+
+            # Top/End scroll BOTH panels simultaneously
+            ttk.Button(btn_frame, text="⬆ Top", width=7,
+                       command=self._scroll_both_top
+                       ).pack(side="left", padx=(0, 2))
+            ttk.Button(btn_frame, text="⬇ End", width=7,
+                       command=self._scroll_both_end
+                       ).pack(side="left", padx=(0, 8))
+
             ttk.Separator(btn_frame, orient="vertical").pack(
                 side="left", fill="y", padx=(0, 8))
             ttk.Button(btn_frame, text="⏱ Mark start", width=12,
                        command=self._mark_start_time).pack(side="left", padx=(0, 2))
             ttk.Button(btn_frame, text="⏱ Mark end", width=11,
                        command=self._mark_end_time).pack(side="left")
-
         # ── Text widget + scrollbars ──────────────────────────────────────────
         txt = tk.Text(f, wrap="none", width=48, height=22,
                       undo=True, font=("Monospace", 9),
@@ -493,7 +486,6 @@ class App(tk.Tk):
         scrolly.grid(row=1, column=1, sticky="ns")
         scrollx.grid(row=2, column=0, sticky="ew")
 
-        _txt_ref[0] = txt
         return txt
 
     # ── Folder / pair navigation ──────────────────────────────────────────────
@@ -595,6 +587,16 @@ class App(tk.Tk):
         ))
 
     # ── Mark times ────────────────────────────────────────────────────────────
+
+    def _scroll_both_top(self):
+        """Scroll both preview panels to the top."""
+        self.src_text.see("1.0")
+        self.ref_text.see("1.0")
+
+    def _scroll_both_end(self):
+        """Scroll both preview panels to the bottom."""
+        self.src_text.see(tk.END)
+        self.ref_text.see(tk.END)
 
     def _mark_start_time(self):
         w = self._active_text
